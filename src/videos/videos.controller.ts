@@ -9,19 +9,15 @@ import {
   UseGuards,
   UsePipes,
   ValidationPipe,
-  UploadedFile,
-  UseInterceptors,
+  NotFoundException
 } from '@nestjs/common';
 import { VideosService } from './videos.service';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { UpdateVideoDto } from './dto/update-video.dto';
 import { SupabaseAuthGuard } from '../auth/jwt-auth.guard';
-import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { BadRequestException } from '@nestjs/common';
 import { MinioService } from '../minio/minio.service';
-import type { Express } from 'express';
 
 @Controller('videos')
 @UseGuards(SupabaseAuthGuard)
@@ -31,6 +27,22 @@ export class VideosController {
     private readonly minioService: MinioService,
   ) {}
 
+@Get('stream/:id')
+async streamVideo(@Param('id') id: string) {
+  // Step 1: Fetch video metadata from Supabase
+  const video = await this.videosService.findOne(id);
+  if (!video) throw new NotFoundException('Video not found');
+
+  // Step 2: Generate presigned URL from MinIO
+  const url = await this.minioService.getFileUrl(video.video_path);
+
+  return {
+    message: 'Presigned URL generated successfully',
+    video_title: video.title,
+    stream_url: url,
+    expires_in: '1 hour',
+  };
+  }
 // Upload video directly from HDD and store metadata
 @Post('upload')
 async uploadVideoFromHDD(@Body() dto: CreateVideoDto) {
