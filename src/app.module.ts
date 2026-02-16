@@ -6,12 +6,13 @@ import { TopicsModule } from './topics/topics.module';
 import { VideosModule } from './videos/videos.module';
 import { CommentsModule } from './comments/comments.module';
 import { MinioModule } from './minio/minio.module';
+import { RecentActivityModule } from './recent-activity/recent-activity.module';
+import { AdminDashboardModule } from './admin-dashboard/admin-dashboard.module';
 import * as dotenv from 'dotenv';
-import { Min } from 'class-validator';
 dotenv.config();
 
 @Module({
-  imports: [AuthModule, TopicsModule, VideosModule, CommentsModule,MinioModule],
+  imports: [RecentActivityModule, AuthModule, TopicsModule, VideosModule, CommentsModule, MinioModule, AdminDashboardModule],
   controllers: [AppController],
   providers: [AppService],
 })

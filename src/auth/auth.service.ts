@@ -1,11 +1,14 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { supabase } from '../supabase/supabase.client';
 import { SignupDto } from './dto/signup.dto';
+import { RecentActivityService } from '../recent-activity/recent-activity.service';
 
 @Injectable()
 export class AuthService {
+  constructor(private readonly recentActivity: RecentActivityService) {}
+
   async signup(dto: SignupDto) {
-    const { email, password, user_name, role } = dto;
+    const { email, password, user_name } = dto;
 
     // Create user in Supabase Auth
     const { data, error } = await supabase.auth.signUp({
@@ -15,17 +18,23 @@ export class AuthService {
 
     if (error) throw new BadRequestException(error.message);
 
-    // ✅ Insert into Users table (use email_id, not email)
+    // Signup creates only role=user accounts (admins are added separately).
+    // role is required by DB; set explicitly so it is never null (e.g. if a trigger also inserts).
+    const defaultRole = 'user';
     const { error: userError } = await supabase.from('Users').insert([
       {
-        email_id: email, // 👈 fixed field name
-        user_name,
-        role,
+        email_id: email.trim().toLowerCase(),
+        user_name: user_name ?? '',
+        role: defaultRole,
+        auth_user_id: data.user?.id ?? null,
       },
     ]);
 
     if (userError) throw new BadRequestException(userError.message);
 
+    if (data.user?.id) {
+      await this.recentActivity.log(data.user.id, 'signup');
+    }
     return { message: 'User created successfully' };
   }
 
@@ -57,7 +66,9 @@ export class AuthService {
       throw new BadRequestException(`No user found for this email_id: ${email_id}`);
 
     const userData = allData[0];
-
+    if (data.user?.id) {
+      await this.recentActivity.log(data.user.id, 'login');
+    }
     return {
       token: data.session?.access_token,
       user: {
