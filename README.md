@@ -57,6 +57,26 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## Docker
+
+- **`Dockerfile.backend`**: container image for this NestJS backend API.
+- **`docker-compose.yml`**: runs the backend + MinIO locally. Supabase stays external (set in `.env`).
+
+```bash
+# Copy env and set SUPABASE_URL + SUPABASE_KEY (and optionally MinIO credentials)
+cp .env.example .env
+
+# Build and run backend + MinIO
+docker compose up -d
+
+# Backend: http://localhost:3000
+# MinIO API: http://localhost:9000
+# MinIO Console: http://localhost:9001
+```
+
+- **Build backend image only:** `docker compose build backend`
+- **Direct build:** `docker build -f Dockerfile.backend -t video-management-backend .`
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
