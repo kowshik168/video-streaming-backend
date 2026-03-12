@@ -16,23 +16,36 @@ export interface DashboardStats {
   roleDistribution: { name: string; value: number }[];
   viewsData: { day: string; views: number }[];
   storageBreakdown: { name: string; value: number }[];
-  recentActivity: { id: string; action: string; user: string; time: string; type: string }[];
+  recentActivity: {
+    id: string;
+    action: string;
+    user: string;
+    time: string;
+    type: string;
+  }[];
   topVideos: { id: string; title: string; views: number; topic: string }[];
 }
 
 @Injectable()
 export class AdminDashboardService {
   async getStats(): Promise<DashboardStats> {
-    const [kpis, userGrowthData, uploadsData, topicVideoData, roleDistribution, recentActivity, topVideos] =
-      await Promise.all([
-        this.getKpis(),
-        this.getUserGrowthData(),
-        this.getUploadsData(),
-        this.getTopicVideoData(),
-        this.getRoleDistribution(),
-        this.getRecentActivity(),
-        this.getTopVideos(),
-      ]);
+    const [
+      kpis,
+      userGrowthData,
+      uploadsData,
+      topicVideoData,
+      roleDistribution,
+      recentActivity,
+      topVideos,
+    ] = await Promise.all([
+      this.getKpis(),
+      this.getUserGrowthData(),
+      this.getUploadsData(),
+      this.getTopicVideoData(),
+      this.getRoleDistribution(),
+      this.getRecentActivity(),
+      this.getTopVideos(),
+    ]);
 
     return {
       kpis,
@@ -54,7 +67,10 @@ export class AdminDashboardService {
 
     const [usersRes, usersLast7Res, videosRes, topicsRes] = await Promise.all([
       supabase.from('Users').select('id', { count: 'exact', head: true }),
-      supabase.from('Users').select('id', { count: 'exact', head: true }).gte('created_at', sevenDaysAgo.toISOString()),
+      supabase
+        .from('Users')
+        .select('id', { count: 'exact', head: true })
+        .gte('created_at', sevenDaysAgo.toISOString()),
       supabase.from('videos').select('id', { count: 'exact', head: true }),
       supabase.from('topics').select('id', { count: 'exact', head: true }),
     ]);
@@ -69,7 +85,9 @@ export class AdminDashboardService {
     };
   }
 
-  private async getUserGrowthData(): Promise<{ month: string; users: number }[]> {
+  private async getUserGrowthData(): Promise<
+    { month: string; users: number }[]
+  > {
     const { data: users } = await supabase
       .from('Users')
       .select('created_at')
@@ -77,7 +95,20 @@ export class AdminDashboardService {
     if (!users?.length) return [];
 
     const byMonth = new Map<string, number>();
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     for (const u of users) {
       const d = new Date(u.created_at);
       const key = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
@@ -121,14 +152,23 @@ export class AdminDashboardService {
       .map(([, count], i) => ({ week: `W${i + 1}`, uploads: count }));
   }
 
-  private async getTopicVideoData(): Promise<{ topic: string; videos: number }[]> {
-    const { data } = await supabase.from('videos').select('topic_id, topics(name)').limit(1000);
+  private async getTopicVideoData(): Promise<
+    { topic: string; videos: number }[]
+  > {
+    const { data } = await supabase
+      .from('videos')
+      .select('topic_id, topics(name)')
+      .limit(1000);
     if (!data?.length) return [];
 
     const byTopic = new Map<string, number>();
     for (const row of data) {
       const t = row.topics as { name: string } | { name: string }[] | null;
-      const name = !t ? 'Unknown' : Array.isArray(t) ? t[0]?.name ?? 'Unknown' : t.name;
+      const name = !t
+        ? 'Unknown'
+        : Array.isArray(t)
+          ? (t[0]?.name ?? 'Unknown')
+          : t.name;
       byTopic.set(name, (byTopic.get(name) ?? 0) + 1);
     }
     return Array.from(byTopic.entries())
@@ -137,7 +177,9 @@ export class AdminDashboardService {
       .map(([topic, videos]) => ({ topic, videos }));
   }
 
-  private async getRoleDistribution(): Promise<{ name: string; value: number }[]> {
+  private async getRoleDistribution(): Promise<
+    { name: string; value: number }[]
+  > {
     const { data } = await supabase.from('Users').select('role');
     if (!data?.length) return [];
 
@@ -234,10 +276,20 @@ export class AdminDashboardService {
       .limit(5);
     if (!data?.length) return [];
 
-    return data.map((v: { id: string; title: string; topics: { name: string } | { name: string }[] | null }) => {
-      const t = v.topics;
-      const topicName = !t ? 'Unknown' : Array.isArray(t) ? t[0]?.name ?? 'Unknown' : t.name;
-      return { id: v.id, title: v.title, views: 0, topic: topicName };
-    });
+    return data.map(
+      (v: {
+        id: string;
+        title: string;
+        topics: { name: string } | { name: string }[] | null;
+      }) => {
+        const t = v.topics;
+        const topicName = !t
+          ? 'Unknown'
+          : Array.isArray(t)
+            ? (t[0]?.name ?? 'Unknown')
+            : t.name;
+        return { id: v.id, title: v.title, views: 0, topic: topicName };
+      },
+    );
   }
 }

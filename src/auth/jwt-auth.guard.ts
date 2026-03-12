@@ -1,4 +1,9 @@
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { supabase } from '../supabase/supabase.client';
 
 @Injectable()
@@ -10,7 +15,9 @@ export class SupabaseAuthGuard implements CanActivate {
     // 🧩 Check if header exists and is valid
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       console.error('❌ Missing or invalid Authorization header');
-      throw new UnauthorizedException('Missing or invalid authorization header');
+      throw new UnauthorizedException(
+        'Missing or invalid authorization header',
+      );
     }
 
     // 🧩 Extract the token part (after "Bearer ")

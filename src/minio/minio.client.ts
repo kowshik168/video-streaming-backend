@@ -13,6 +13,8 @@ export const minioClient = new Client({
 
 // Presigned URLs: we generate with minioClient (connects to MINIO_ENDPOINT, e.g. minio:9000 in Docker).
 // The returned URL host is rewritten in MinioService.getFileUrl() to MINIO_PUBLIC_* so the browser can reach MinIO.
-export const minioPublicUrlBase = (process.env.MINIO_PUBLIC_ENDPOINT && process.env.MINIO_PUBLIC_ENDPOINT.length > 0)
-  ? `${process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http'}://${process.env.MINIO_PUBLIC_ENDPOINT}:${Number(process.env.MINIO_PUBLIC_PORT || process.env.MINIO_PORT) || 9000}`
-  : null;
+export const minioPublicUrlBase =
+  process.env.MINIO_PUBLIC_ENDPOINT &&
+  process.env.MINIO_PUBLIC_ENDPOINT.length > 0
+    ? `${process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http'}://${process.env.MINIO_PUBLIC_ENDPOINT}:${Number(process.env.MINIO_PUBLIC_PORT || process.env.MINIO_PORT) || 9000}`
+    : null;

@@ -26,6 +26,7 @@ import { Roles } from '../auth/roles.decorator';
 import { MinioService } from '../minio/minio.service';
 import { signStreamToken } from './stream-token';
 import type { AuthenticatedRequest } from '../auth/types';
+import { AiFeaturesService } from '../ai-features/ai-features.service';
 
 const PUBLIC_API_URL = process.env.PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -35,82 +36,97 @@ export class VideosController {
   constructor(
     private readonly videosService: VideosService,
     private readonly minioService: MinioService,
+    private readonly aiFeaturesService: AiFeaturesService,
   ) {}
 
-@Get('stream/:id')
-async streamVideo(@Param('id') id: string) {
-  // Step 1: Fetch video metadata from Supabase
-  const video = await this.videosService.findOne(id);
-  if (!video) throw new NotFoundException('Video not found');
+  @Get('stream/:id')
+  async streamVideo(@Param('id') id: string) {
+    // Step 1: Fetch video metadata from Supabase
+    const video = await this.videosService.findOne(id);
+    if (!video) throw new NotFoundException('Video not found');
 
-  // Step 2: Generate presigned URL from MinIO
-  const url = await this.minioService.getFileUrl(video.video_path);
+    // Step 2: Generate presigned URL from MinIO
+    const url = await this.minioService.getFileUrl(video.video_path);
 
-  return {
-    message: 'Presigned URL generated successfully',
-    video_title: video.title,
-    stream_url: url,
-    expires_in: '1 hour',
-  };
-  }
-// One-shot upload: ensure topic exists (by name) and upload video + metadata (admin only)
-@Post('upload')
-@Roles('admin')
-async uploadVideoFromHDD(@Body() dto: CreateVideoWithTopicDto, @Req() req: AuthenticatedRequest) {
-  const path = require('path');
-  const fs = require('fs');
-
-  // Validate file exists
-  if (!fs.existsSync(dto.video_path)) {
-    throw new BadRequestException(`File not found at path: ${dto.video_path}`);
-  }
-
-  const fileName = path.basename(dto.video_path);
-
-  try {
-    // Resolve or create topic by name
-    const topicId = await this.videosService.findOrCreateTopicByName(
-      dto.topic_name,
-      dto.topic_description,
-    );
-
-    // Step 1️⃣: Upload to MinIO
-    const { etag } = await this.minioService.uploadFile(dto.video_path, fileName);
-
-    // Step 2️⃣: Try inserting metadata in Supabase
-    const videoDto: CreateVideoDto = {
-      topic_id: topicId,
-      title: dto.title,
-      description: dto.description,
-      video_path: fileName, // store MinIO file name, not full path
-      is_active: dto.is_active ?? true,
-      tryout_link: dto.tryout_link,
-    };
-
-    const videoRecord = await this.videosService.create(videoDto, req.user!.id);
-
-    // Step 3️⃣: Success
     return {
-      message: '✅ Uploaded successfully and metadata stored',
-      fileName,
-      etag,
-      videoRecord,
+      message: 'Presigned URL generated successfully',
+      video_title: video.title,
+      stream_url: url,
+      expires_in: '1 hour',
     };
+  }
+  // One-shot upload: ensure topic exists (by name) and upload video + metadata (admin only)
+  @Post('upload')
+  @Roles('admin')
+  async uploadVideoFromHDD(
+    @Body() dto: CreateVideoWithTopicDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const path = require('path');
+    const fs = require('fs');
 
-  } catch (err) {
-    console.error('❌ Upload or DB operation failed:', err.message);
-
-    // Step 4️⃣: Rollback — delete uploaded file if exists
-    try {
-      await this.minioService.deleteFile(path.basename(dto.video_path));
-      console.log('🧹 Cleaned up file from MinIO due to DB failure');
-    } catch (cleanupErr) {
-      console.error('⚠️ Cleanup failed (file may remain in MinIO):', cleanupErr.message);
+    // Validate file exists
+    if (!fs.existsSync(dto.video_path)) {
+      throw new BadRequestException(
+        `File not found at path: ${dto.video_path}`,
+      );
     }
 
-    throw new BadRequestException(`Upload failed: ${err.message}`);
+    const fileName = path.basename(dto.video_path);
+
+    try {
+      // Resolve or create topic by name
+      const topicId = await this.videosService.findOrCreateTopicByName(
+        dto.topic_name,
+        dto.topic_description,
+      );
+
+      // Step 1️⃣: Upload to MinIO
+      const { etag } = await this.minioService.uploadFile(
+        dto.video_path,
+        fileName,
+      );
+
+      // Step 2️⃣: Try inserting metadata in Supabase
+      const videoDto: CreateVideoDto = {
+        topic_id: topicId,
+        title: dto.title,
+        description: dto.description,
+        video_path: fileName, // store MinIO file name, not full path
+        is_active: dto.is_active ?? true,
+        tryout_link: dto.tryout_link,
+      };
+
+      const videoRecord = await this.videosService.create(
+        videoDto,
+        req.user!.id,
+      );
+      await this.aiFeaturesService.enqueueProcessing(videoRecord.id, fileName);
+
+      // Step 3️⃣: Success
+      return {
+        message: '✅ Uploaded successfully and metadata stored',
+        fileName,
+        etag,
+        videoRecord,
+      };
+    } catch (err) {
+      console.error('❌ Upload or DB operation failed:', err.message);
+
+      // Step 4️⃣: Rollback — delete uploaded file if exists
+      try {
+        await this.minioService.deleteFile(path.basename(dto.video_path));
+        console.log('🧹 Cleaned up file from MinIO due to DB failure');
+      } catch (cleanupErr) {
+        console.error(
+          '⚠️ Cleanup failed (file may remain in MinIO):',
+          cleanupErr.message,
+        );
+      }
+
+      throw new BadRequestException(`Upload failed: ${err.message}`);
+    }
   }
-}
 
   // Multipart upload: browser file + metadata (admin only)
   @Post('upload-file')
@@ -118,7 +134,14 @@ async uploadVideoFromHDD(@Body() dto: CreateVideoWithTopicDto, @Req() req: Authe
   @UseInterceptors(FileInterceptor('file'))
   async uploadVideoMultipart(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { topic_id: string; title: string; description?: string; tryout_link?: string; is_active?: string },
+    @Body()
+    body: {
+      topic_id: string;
+      title: string;
+      description?: string;
+      tryout_link?: string;
+      is_active?: string;
+    },
     @Req() req: AuthenticatedRequest,
   ) {
     if (!file || !file.buffer) {
@@ -134,10 +157,16 @@ async uploadVideoFromHDD(@Body() dto: CreateVideoWithTopicDto, @Req() req: Authe
       throw new BadRequestException('Title is required');
     }
 
-    const fileName = `${Date.now()}-${file.originalname}`.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileName = `${Date.now()}-${file.originalname}`.replace(
+      /[^a-zA-Z0-9._-]/g,
+      '_',
+    );
 
     try {
-      const { etag } = await this.minioService.uploadBuffer(file.buffer, fileName);
+      const { etag } = await this.minioService.uploadBuffer(
+        file.buffer,
+        fileName,
+      );
 
       const videoDto: CreateVideoDto = {
         topic_id: body.topic_id.trim(),
@@ -148,7 +177,11 @@ async uploadVideoFromHDD(@Body() dto: CreateVideoWithTopicDto, @Req() req: Authe
         tryout_link: body.tryout_link?.trim() || undefined,
       };
 
-      const videoRecord = await this.videosService.create(videoDto, req.user!.id);
+      const videoRecord = await this.videosService.create(
+        videoDto,
+        req.user!.id,
+      );
+      await this.aiFeaturesService.enqueueProcessing(videoRecord.id, fileName);
 
       return {
         message: '✅ Uploaded successfully and metadata stored',
@@ -179,7 +212,11 @@ async uploadVideoFromHDD(@Body() dto: CreateVideoWithTopicDto, @Req() req: Authe
   @Put(':id')
   @Roles('admin')
   @UsePipes(new ValidationPipe({ whitelist: true }))
-  update(@Param('id') id: string, @Body() dto: UpdateVideoDto, @Req() req: AuthenticatedRequest) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateVideoDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.videosService.update(id, dto, req.user!.id);
   }
 
@@ -231,7 +268,10 @@ async uploadVideoFromHDD(@Body() dto: CreateVideoWithTopicDto, @Req() req: Authe
   // Remove like/dislike
   @Delete(':id/reaction')
   @Roles('user', 'admin')
-  async removeReaction(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+  async removeReaction(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
     const video = await this.videosService.findOne(id);
     if (!video) throw new NotFoundException('Video not found');
     return this.videosService.removeReaction(id, req.user!.id);
