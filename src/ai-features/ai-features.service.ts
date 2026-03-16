@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import OpenAI from 'openai';
 import { MinioService } from '../minio/minio.service';
@@ -28,27 +29,70 @@ type QuizDraft = {
   explanation?: string;
 };
 
+type AiProvider = 'openai' | 'local';
+
 @Injectable()
 export class AiFeaturesService {
-  private readonly openai: OpenAI;
+  private readonly openai: OpenAI | null;
+  private readonly logger = new Logger(AiFeaturesService.name);
+  private readonly aiProvider: AiProvider;
+  private readonly ollamaUrl: string;
+  private readonly localChatModel: string;
+  private readonly localEmbeddingModel: string;
+  private readonly localWhisperUrl: string;
 
   constructor(private readonly minioService: MinioService) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is required for AI features.');
+    this.aiProvider =
+      (process.env.AI_PROVIDER as AiProvider | undefined) ?? 'local';
+    this.ollamaUrl = process.env.OLLAMA_URL ?? 'http://ollama:11434';
+    this.localChatModel = process.env.LOCAL_CHAT_MODEL ?? 'llama3.2:3b';
+    this.localEmbeddingModel =
+      process.env.LOCAL_EMBEDDING_MODEL ?? 'nomic-embed-text';
+    this.localWhisperUrl =
+      process.env.LOCAL_WHISPER_URL ?? 'http://whisper:9000';
+
+    if (this.aiProvider === 'openai') {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        throw new Error(
+          'OPENAI_API_KEY is required when AI_PROVIDER=openai.',
+        );
+      }
+      this.openai = new OpenAI({ apiKey });
+      this.logger.log('AI provider: OpenAI');
+      return;
     }
-    this.openai = new OpenAI({ apiKey });
+
+    this.openai = null;
+    this.logger.log(
+      `AI provider: local (ollama=${this.ollamaUrl}, whisper=${this.localWhisperUrl})`,
+    );
   }
 
   async enqueueProcessing(videoId: string, objectName: string) {
+    this.logger.log(
+      `Queueing AI processing for video=${videoId} object=${objectName}`,
+    );
     await this.updateJob(videoId, 'queued');
-    void this.processVideo(videoId, objectName);
+    void this.processVideo(videoId, objectName).catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : 'Unknown processing error';
+      this.logger.error(
+        `Detached AI processing failed for video=${videoId}: ${message}`,
+      );
+    });
   }
 
   async processVideo(videoId: string, objectName: string) {
     try {
+      this.logger.log(
+        `Starting AI processing for video=${videoId} object=${objectName}`,
+      );
       await this.updateJob(videoId, 'processing', null, true);
       const fileBuffer = await this.readObjectAsBuffer(objectName);
+      this.logger.log(
+        `Downloaded source object for video=${videoId}, bytes=${fileBuffer.byteLength}`,
+      );
       const transcription = await this.transcribe(fileBuffer, objectName);
 
       const segments = this.normalizeSegments(transcription.segments ?? []);
@@ -56,6 +100,9 @@ export class AiFeaturesService {
       if (!fullText) {
         throw new BadRequestException('Transcription returned empty text');
       }
+      this.logger.log(
+        `Transcription completed for video=${videoId}, segments=${segments.length}`,
+      );
 
       const transcriptId = await this.replaceTranscript(videoId, {
         language: transcription.language ?? null,
@@ -67,16 +114,27 @@ export class AiFeaturesService {
       await this.replaceSegments(videoId, transcriptId, segments);
       const chapters = await this.generateChapters(fullText, segments);
       await this.replaceChapters(videoId, chapters);
+      this.logger.log(
+        `Chapter generation completed for video=${videoId}, chapters=${chapters.length}`,
+      );
 
       const quizzes = await this.generateQuiz(fullText);
       await this.replaceQuizDrafts(videoId, quizzes);
+      this.logger.log(
+        `Quiz generation completed for video=${videoId}, quizzes=${quizzes.length}`,
+      );
 
       await this.updateJob(videoId, 'completed');
+      this.logger.log(`AI processing completed for video=${videoId}`);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown processing error';
       await this.updateJob(videoId, 'failed', message);
-      throw error;
+      this.logger.error(
+        `AI processing failed for video=${videoId}: ${message}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return;
     }
   }
 
@@ -91,6 +149,9 @@ export class AiFeaturesService {
   }
 
   async semanticSearch(query: string, limit = 10, threshold = 0.6) {
+    if (this.aiProvider === 'local') {
+      return this.semanticSearchLocal(query, limit, threshold);
+    }
     const queryEmbedding = await this.embedText(query);
     const { data, error } = await supabase.rpc('search_transcript_segments', {
       query_embedding: this.toVectorLiteral(queryEmbedding),
@@ -99,6 +160,49 @@ export class AiFeaturesService {
     });
     if (error) throw new BadRequestException(error.message);
     return data ?? [];
+  }
+
+  private async semanticSearchLocal(
+    query: string,
+    limit: number,
+    threshold: number,
+  ) {
+    const { data: segments, error } = await supabase
+      .from('transcript_segments')
+      .select('id, video_id, start_seconds, end_seconds, content')
+      .ilike('content', `%${query}%`)
+      .limit(limit * 3);
+    if (error) throw new BadRequestException(error.message);
+
+    const list = (segments ?? []).map((segment) => {
+      const score = this.computeTextSimilarity(query, segment.content);
+      return { ...segment, similarity: score };
+    });
+
+    const filtered = list
+      .filter((row) => row.similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+
+    if (!filtered.length) return [];
+
+    const videoIds = [...new Set(filtered.map((row) => row.video_id))];
+    const { data: videos, error: videoError } = await supabase
+      .from('videos')
+      .select('id, title')
+      .in('id', videoIds);
+    if (videoError) throw new BadRequestException(videoError.message);
+
+    const titleById = new Map((videos ?? []).map((video) => [video.id, video.title]));
+    return filtered.map((row) => ({
+      segment_id: row.id,
+      video_id: row.video_id,
+      video_title: titleById.get(row.video_id) ?? 'Untitled',
+      start_seconds: row.start_seconds,
+      end_seconds: row.end_seconds,
+      content: row.content,
+      similarity: row.similarity,
+    }));
   }
 
   async getTranscript(videoId: string) {
@@ -241,6 +345,13 @@ export class AiFeaturesService {
   }
 
   private async transcribe(fileBuffer: Buffer, fileName: string) {
+    if (this.aiProvider === 'local') {
+      return this.transcribeLocal(fileBuffer, fileName);
+    }
+
+    if (!this.openai) {
+      throw new InternalServerErrorException('OpenAI client not initialized');
+    }
     const fileBytes = new Uint8Array(fileBuffer);
     const file = new File([fileBytes], fileName, { type: 'video/mp4' });
     const transcription = await this.openai.audio.transcriptions.create({
@@ -256,6 +367,53 @@ export class AiFeaturesService {
       segments?: WhisperSegment[];
       [key: string]: unknown;
     };
+  }
+
+  private async transcribeLocal(fileBuffer: Buffer, fileName: string) {
+    const baseUrl = this.localWhisperUrl.replace(/\/$/, '');
+    const blob = new Blob([new Uint8Array(fileBuffer)], { type: 'video/mp4' });
+    const formData = new FormData();
+    formData.append('audio_file', blob, fileName);
+
+    const primary = await fetch(`${baseUrl}/asr?task=transcribe&output=json`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    let payload: Record<string, unknown> | null = null;
+    if (primary.ok) {
+      payload = (await primary.json()) as Record<string, unknown>;
+    } else {
+      const fallbackForm = new FormData();
+      fallbackForm.append('file', blob, fileName);
+      const fallback = await fetch(`${baseUrl}/inference`, {
+        method: 'POST',
+        body: fallbackForm,
+      });
+      if (!fallback.ok) {
+        throw new BadRequestException(
+          `Local whisper failed (${primary.status}/${fallback.status})`,
+        );
+      }
+      payload = (await fallback.json()) as Record<string, unknown>;
+    }
+
+    const rawSegments = Array.isArray(payload?.segments)
+      ? (payload.segments as Array<Record<string, unknown>>)
+      : [];
+    const segments: WhisperSegment[] = rawSegments.map((segment, idx) => ({
+      id: idx,
+      start: Number(segment.start ?? 0),
+      end: Number(segment.end ?? segment.start ?? 0),
+      text: String(segment.text ?? ''),
+    }));
+    const text = String(payload?.text ?? '').trim();
+    const language =
+      payload?.language == null ? undefined : String(payload.language);
+    const duration =
+      payload?.duration == null ? undefined : Number(payload.duration);
+
+    return { text, language, duration, segments };
   }
 
   private normalizeSegments(segments: WhisperSegment[]) {
@@ -305,18 +463,39 @@ export class AiFeaturesService {
     await supabase.from('transcript_segments').delete().eq('video_id', videoId);
     if (!segments.length) return;
 
-    const embeddings = await this.embedBatch(
-      segments.map((segment) => segment.content),
-    );
-    const rows = segments.map((segment, idx) => ({
-      video_id: videoId,
-      transcript_id: transcriptId,
-      segment_index: segment.segment_index,
-      start_seconds: segment.start_seconds,
-      end_seconds: segment.end_seconds,
-      content: segment.content,
-      embedding: this.toVectorLiteral(embeddings[idx]),
-    }));
+    let rows: Array<{
+      video_id: string;
+      transcript_id: string;
+      segment_index: number;
+      start_seconds: number;
+      end_seconds: number;
+      content: string;
+      embedding?: string;
+    }>;
+
+    if (this.aiProvider === 'local') {
+      rows = segments.map((segment) => ({
+        video_id: videoId,
+        transcript_id: transcriptId,
+        segment_index: segment.segment_index,
+        start_seconds: segment.start_seconds,
+        end_seconds: segment.end_seconds,
+        content: segment.content,
+      }));
+    } else {
+      const embeddings = await this.embedBatch(
+        segments.map((segment) => segment.content),
+      );
+      rows = segments.map((segment, idx) => ({
+        video_id: videoId,
+        transcript_id: transcriptId,
+        segment_index: segment.segment_index,
+        start_seconds: segment.start_seconds,
+        end_seconds: segment.end_seconds,
+        content: segment.content,
+        embedding: this.toVectorLiteral(embeddings[idx]),
+      }));
+    }
     const { error } = await supabase.from('transcript_segments').insert(rows);
     if (error) throw new BadRequestException(error.message);
   }
@@ -436,21 +615,10 @@ ${fullText.slice(0, 14000)}`;
   }
 
   private async chatJson(prompt: string): Promise<Record<string, any>> {
-    const completion = await this.openai.chat.completions.create({
-      model: process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini',
-      temperature: 0.2,
-      messages: [
-        {
-          role: 'system',
-          content: 'Return only strict JSON with no markdown fences.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    });
-    const content = completion.choices[0]?.message?.content ?? '{}';
+    const content =
+      this.aiProvider === 'local'
+        ? await this.chatJsonLocal(prompt)
+        : await this.chatJsonOpenAi(prompt);
     try {
       return JSON.parse(content) as Record<string, any>;
     } catch {
@@ -459,6 +627,19 @@ ${fullText.slice(0, 14000)}`;
   }
 
   private async embedText(input: string) {
+    if (this.aiProvider === 'local') {
+      const vector = await this.embedTextLocal(input);
+      if (!vector.length) {
+        throw new InternalServerErrorException(
+          'Failed to create local embedding',
+        );
+      }
+      return vector;
+    }
+
+    if (!this.openai) {
+      throw new InternalServerErrorException('OpenAI client not initialized');
+    }
     const response = await this.openai.embeddings.create({
       model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
       input,
@@ -470,6 +651,17 @@ ${fullText.slice(0, 14000)}`;
   }
 
   private async embedBatch(inputs: string[]) {
+    if (this.aiProvider === 'local') {
+      const vectors: number[][] = [];
+      for (const input of inputs) {
+        vectors.push(await this.embedTextLocal(input));
+      }
+      return vectors;
+    }
+
+    if (!this.openai) {
+      throw new InternalServerErrorException('OpenAI client not initialized');
+    }
     const vectors: number[][] = [];
     const batchSize = 50;
     for (let i = 0; i < inputs.length; i += batchSize) {
@@ -485,5 +677,89 @@ ${fullText.slice(0, 14000)}`;
 
   private toVectorLiteral(values: number[]) {
     return `[${values.map((value) => Number(value).toFixed(8)).join(',')}]`;
+  }
+
+  private async chatJsonOpenAi(prompt: string): Promise<string> {
+    if (!this.openai) {
+      throw new InternalServerErrorException('OpenAI client not initialized');
+    }
+    const completion = await this.openai.chat.completions.create({
+      model: process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini',
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content: 'Return only strict JSON with no markdown fences.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    });
+    return completion.choices[0]?.message?.content ?? '{}';
+  }
+
+  private async chatJsonLocal(prompt: string): Promise<string> {
+    const response = await fetch(`${this.ollamaUrl.replace(/\/$/, '')}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.localChatModel,
+        prompt: `Return only valid JSON. ${prompt}`,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.2 },
+      }),
+    });
+    if (!response.ok) {
+      throw new BadRequestException(
+        `Local chat model request failed (${response.status})`,
+      );
+    }
+    const payload = (await response.json()) as { response?: string };
+    return payload.response ?? '{}';
+  }
+
+  private async embedTextLocal(input: string): Promise<number[]> {
+    const baseUrl = this.ollamaUrl.replace(/\/$/, '');
+    const primary = await fetch(`${baseUrl}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.localEmbeddingModel, prompt: input }),
+    });
+
+    if (primary.ok) {
+      const data = (await primary.json()) as { embedding?: number[] };
+      return data.embedding ?? [];
+    }
+
+    const fallback = await fetch(`${baseUrl}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.localEmbeddingModel, input: [input] }),
+    });
+    if (!fallback.ok) {
+      throw new BadRequestException(
+        `Local embedding request failed (${primary.status}/${fallback.status})`,
+      );
+    }
+    const payload = (await fallback.json()) as { embeddings?: number[][] };
+    return payload.embeddings?.[0] ?? [];
+  }
+
+  private computeTextSimilarity(query: string, text: string): number {
+    const qTokens = query
+      .toLowerCase()
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1);
+    if (!qTokens.length) return 0;
+    const lowerText = text.toLowerCase();
+    let hits = 0;
+    for (const token of qTokens) {
+      if (lowerText.includes(token)) hits += 1;
+    }
+    return hits / qTokens.length;
   }
 }

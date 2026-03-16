@@ -39,7 +39,7 @@ export class AiFeaturesController {
   }
 
   @Get('videos/:videoId/status')
-  @Roles('admin')
+  @Roles('user', 'admin')
   async getProcessingStatus(@Param('videoId') videoId: string) {
     return this.aiFeatures.getProcessingStatus(videoId);
   }
