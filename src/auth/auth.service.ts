@@ -53,7 +53,7 @@ export class AuthService {
 
     // ✅ Correct case-sensitive table reference
     const { data: allData, error: userError } = await supabase
-      .from("Users")  // 👈 explicit schema + quoted case
+      .from('Users') // 👈 explicit schema + quoted case
       .select('user_name, role, email_id')
       .eq('email_id', email_id);
     console.log(allData);
@@ -63,7 +63,9 @@ export class AuthService {
 
     if (userError) throw new BadRequestException(userError.message);
     if (!allData || allData.length === 0)
-      throw new BadRequestException(`No user found for this email_id: ${email_id}`);
+      throw new BadRequestException(
+        `No user found for this email_id: ${email_id}`,
+      );
 
     const userData = allData[0];
     if (data.user?.id) {
@@ -78,6 +80,4 @@ export class AuthService {
       },
     };
   }
-
 }
-

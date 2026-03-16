@@ -1,4 +1,8 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { supabase } from '../supabase/supabase.client';
 import { RecentActivityService } from '../recent-activity/recent-activity.service';
 
@@ -42,7 +46,9 @@ export class CommentsService {
       .from('Users')
       .select('auth_user_id, user_name')
       .in('auth_user_id', userIds);
-    const nameByUserId = new Map((users ?? []).map((u) => [u.auth_user_id, u.user_name ?? 'User']));
+    const nameByUserId = new Map(
+      (users ?? []).map((u) => [u.auth_user_id, u.user_name ?? 'User']),
+    );
 
     return comments.map((c) => ({
       id: c.id,

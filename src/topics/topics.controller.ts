@@ -1,4 +1,16 @@
-import { Controller, Get, Post, Body, Param, Delete, Put, Req, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Delete,
+  Put,
+  Req,
+  UseGuards,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import { TopicsService } from './topics.service';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
@@ -29,7 +41,11 @@ export class TopicsController {
   @Put(':id')
   @UseGuards(SupabaseAuthGuard)
   @UsePipes(new ValidationPipe({ whitelist: true }))
-  update(@Param('id') id: string, @Body() dto: UpdateTopicDto, @Req() req: AuthenticatedRequest) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateTopicDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.topicsService.update(id, dto, req.user!.id);
   }
 

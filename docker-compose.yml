@@ -30,10 +30,19 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-videos}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3000}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      LOCAL_WHISPER_URL: ${LOCAL_WHISPER_URL:-http://whisper:9000}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      LOCAL_CHAT_MODEL: ${LOCAL_CHAT_MODEL:-llama3.1:8b}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-mxbai-embed-large}
     env_file:
       - .env
     depends_on:
       minio:
+        condition: service_started
+      whisper:
+        condition: service_started
+      ollama:
         condition: service_started
     restart: unless-stopped
 
@@ -53,7 +62,31 @@ services:
       - minio_data:/data
     restart: unless-stopped
 
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: video-management-whisper
+    environment:
+      ASR_ENGINE: openai_whisper
+      ASR_MODEL: medium
+    ports:
+      - "9002:9000"
+    networks:
+      - app
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: video-management-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - app
+    restart: unless-stopped
+
 volumes:
   minio_data:
   backend_data:
+  ollama_data:
 

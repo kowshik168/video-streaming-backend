@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { UpdateVideoDto } from './dto/update-video.dto';
 import { supabase } from '../supabase/supabase.client';
@@ -18,7 +22,11 @@ export class VideosService {
   ) {}
 
   async create(dto: CreateVideoDto, userId: string) {
-    const { data, error } = await supabase.from(this.table).insert([dto]).select().single();
+    const { data, error } = await supabase
+      .from(this.table)
+      .insert([dto])
+      .select()
+      .single();
     if (error) throw new BadRequestException(error.message);
     await this.recentActivity.log(userId, 'video_created', {
       videoId: data.id,
@@ -39,7 +47,11 @@ export class VideosService {
   }
 
   async findOne(id: string) {
-    const { data, error } = await supabase.from(this.table).select('*').eq('id', id).single();
+    const { data, error } = await supabase
+      .from(this.table)
+      .select('*')
+      .eq('id', id)
+      .single();
     if (error) throw new NotFoundException('Video not found');
     return data;
   }
@@ -50,7 +62,12 @@ export class VideosService {
       .from(REACTIONS_TABLE)
       .select('reaction, user_id')
       .eq('video_id', videoId);
-    if (error) return { like_count: 0, dislike_count: 0, user_reaction: null as 'like' | 'dislike' | null };
+    if (error)
+      return {
+        like_count: 0,
+        dislike_count: 0,
+        user_reaction: null as 'like' | 'dislike' | null,
+      };
     const list = rows ?? [];
     const like_count = list.filter((r) => r.reaction === 'like').length;
     const dislike_count = list.filter((r) => r.reaction === 'dislike').length;
@@ -63,11 +80,17 @@ export class VideosService {
   }
 
   /** Set or clear the current user's reaction (one per user: like or dislike). */
-  async setReaction(videoId: string, userId: string, reaction: 'like' | 'dislike') {
-    const { error } = await supabase.from(REACTIONS_TABLE).upsert(
-      { video_id: videoId, user_id: userId, reaction },
-      { onConflict: 'video_id,user_id' },
-    );
+  async setReaction(
+    videoId: string,
+    userId: string,
+    reaction: 'like' | 'dislike',
+  ) {
+    const { error } = await supabase
+      .from(REACTIONS_TABLE)
+      .upsert(
+        { video_id: videoId, user_id: userId, reaction },
+        { onConflict: 'video_id,user_id' },
+      );
     if (error) throw new BadRequestException(error.message);
     return this.getReactions(videoId, userId);
   }
@@ -84,7 +107,12 @@ export class VideosService {
   }
 
   async update(id: string, dto: UpdateVideoDto, userId: string) {
-    const { data, error } = await supabase.from(this.table).update(dto).eq('id', id).select().single();
+    const { data, error } = await supabase
+      .from(this.table)
+      .update(dto)
+      .eq('id', id)
+      .select()
+      .single();
     if (error) throw new NotFoundException(error.message);
     await this.recentActivity.log(userId, 'video_updated', { videoId: id });
     return data;
@@ -95,9 +123,17 @@ export class VideosService {
     try {
       await this.minioService.deleteFile(video.video_path);
     } catch (err) {
-      console.warn('⚠️ MinIO delete failed (file may already be gone):', (err as Error)?.message);
+      console.warn(
+        '⚠️ MinIO delete failed (file may already be gone):',
+        (err as Error)?.message,
+      );
     }
-    const { data, error } = await supabase.from(this.table).delete().eq('id', id).select().single();
+    const { data, error } = await supabase
+      .from(this.table)
+      .delete()
+      .eq('id', id)
+      .select()
+      .single();
     if (error) throw new NotFoundException(error.message);
     await this.recentActivity.log(userId, 'video_deleted', { videoId: id });
     return { message: 'Video deleted', video: data };
@@ -117,7 +153,10 @@ export class VideosService {
   /**
    * Find existing topic by name or create a new one, returning its id.
    */
-  async findOrCreateTopicByName(name: string, description?: string): Promise<string> {
+  async findOrCreateTopicByName(
+    name: string,
+    description?: string,
+  ): Promise<string> {
     const normalized = name.trim();
     if (!normalized) {
       throw new BadRequestException('Topic name is required');
@@ -150,4 +189,3 @@ export class VideosService {
     return data.id;
   }
 }
-

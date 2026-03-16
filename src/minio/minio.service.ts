@@ -13,7 +13,12 @@ export class MinioService {
       const exists = await minioClient.bucketExists(bucket);
       if (!exists) await minioClient.makeBucket(bucket);
       const stream = Readable.from(buffer);
-      const etag = await minioClient.putObject(bucket, fileName, stream, buffer.length);
+      const etag = await minioClient.putObject(
+        bucket,
+        fileName,
+        stream,
+        buffer.length,
+      );
       return { fileName, etag };
     } catch (error) {
       console.error('❌ MinIO buffer upload failed:', error);
@@ -45,7 +50,11 @@ export class MinioService {
   async getFileUrl(fileName: string, expirySeconds = 60 * 60) {
     try {
       const bucket = process.env.MINIO_BUCKET!;
-      let url = await minioClient.presignedGetObject(bucket, fileName, expirySeconds);
+      let url = await minioClient.presignedGetObject(
+        bucket,
+        fileName,
+        expirySeconds,
+      );
       if (minioPublicUrlBase) {
         const u = new URL(url);
         url = url.replace(u.origin, minioPublicUrlBase);
@@ -53,15 +62,25 @@ export class MinioService {
       return url;
     } catch (error) {
       console.error('❌ Failed to generate presigned URL:', error);
-      throw new InternalServerErrorException('Failed to generate presigned URL');
+      throw new InternalServerErrorException(
+        'Failed to generate presigned URL',
+      );
     }
   }
 
   /** Get a readable stream of the object (for proxying to the browser). */
-  async getObjectStream(fileName: string, range?: { start: number; end?: number }) {
+  async getObjectStream(
+    fileName: string,
+    range?: { start: number; end?: number },
+  ) {
     const bucket = process.env.MINIO_BUCKET!;
     if (range != null) {
-      return minioClient.getPartialObject(bucket, fileName, range.start, range.end != null ? range.end - range.start + 1 : undefined);
+      return minioClient.getPartialObject(
+        bucket,
+        fileName,
+        range.start,
+        range.end != null ? range.end - range.start + 1 : undefined,
+      );
     }
     return minioClient.getObject(bucket, fileName);
   }

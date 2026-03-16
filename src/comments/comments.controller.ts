@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CommentsService } from './comments.service';
-import {  SupabaseAuthGuard } from '../auth/jwt-auth.guard';
+import { SupabaseAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import type { AuthenticatedRequest } from '../auth/types';
@@ -39,7 +39,10 @@ export class CommentsController {
   // Delete comment (admin or owner)
   @Delete(':id')
   @Roles('user', 'admin')
-  async deleteComment(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+  async deleteComment(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
     return this.commentsService.deleteComment(id, req.user!);
   }
 }

@@ -1,4 +1,10 @@
-import { IsNotEmpty, IsOptional, IsString, IsBoolean, IsUrl } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsBoolean,
+  IsUrl,
+} from 'class-validator';
 
 // One-shot upload DTO: includes topic name instead of topic_id.
 export class CreateVideoWithTopicDto {
@@ -31,4 +37,3 @@ export class CreateVideoWithTopicDto {
   @IsUrl()
   tryout_link?: string;
 }
-
